@@ -1,4 +1,4 @@
-module github.com/southwinds-io/file-exporter
+module southwinds.dev/file-exporter
 
 go 1.19
 
