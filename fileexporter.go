@@ -10,10 +10,10 @@ package fileexporter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,20 +33,28 @@ const (
 	timeFormat = "2006_01_02_15_04_05_999999999"
 	ext        = "inproc"
 	json       = "json"
-	protobuf   = "pb"
+	protobuf   = "proto"
 )
 
-// Marshaller configuration used for marshaling Protobuf to JSON.
+// Marshaller configuration used for marshaling Protobuf.
 var pbTracesMarshaller = ptrace.NewProtoMarshaler()
 var pbMetricsMarshaller = pmetric.NewProtoMarshaler()
 var pbLogsMarshaller = plog.NewProtoMarshaler()
 
+// Marshaller configuration used for marshaling Json.
+var jsonTracesMarshaller = ptrace.NewJSONMarshaler()
+var jsonMetricsMarshaller = pmetric.NewJSONMarshaler()
+var jsonLogsMarshaller = plog.NewJSONMarshaler()
+
 // fileExporter is the implementation of file exporter that writes telemetry data to a file
 // in Protobuf-JSON format.
 type fileExporter struct {
-	path       string
-	mutex      sync.Mutex
-	fileSizeKb string
+	path              string
+	mutex             sync.Mutex
+	fileSizeKb        int64
+	eventsPerFile     int64
+	format            string
+	currentEventCount int64
 }
 
 func (e *fileExporter) Capabilities() consumer.Capabilities {
@@ -54,31 +62,59 @@ func (e *fileExporter) Capabilities() consumer.Capabilities {
 }
 
 func (e *fileExporter) ConsumeTraces(_ context.Context, td ptrace.Traces) error {
-	buf, err := pbTracesMarshaller.MarshalTraces(td)
+
+	var err error
+	var buf []byte
+	if strings.EqualFold(e.format, Json) {
+		buf, err = jsonTracesMarshaller.MarshalTraces(td)
+	} else if strings.EqualFold(e.format, Protobuf) {
+		buf, err = pbTracesMarshaller.MarshalTraces(td)
+	} else {
+		return errors.New("invalid format, valid format value is either json or protobuf")
+	}
+
 	if err != nil {
 		return err
 	}
-	return exportAsLine(e, buf, "traces")
+	return e.exportAsLine(buf, "traces")
 }
 
 func (e *fileExporter) ConsumeMetrics(_ context.Context, md pmetric.Metrics) error {
 
-	buf, err := pbMetricsMarshaller.MarshalMetrics(md) // metricsMarshaler.MarshalMetrics(md)
+	var err error
+	var buf []byte
+	if strings.EqualFold(e.format, Json) {
+		buf, err = jsonMetricsMarshaller.MarshalMetrics(md)
+	} else if strings.EqualFold(e.format, Protobuf) {
+		buf, err = pbMetricsMarshaller.MarshalMetrics(md)
+	} else {
+		return errors.New("invalid format, valid format value is either json or protobuf")
+	}
+
 	if err != nil {
 		return err
 	}
-	return exportAsLine(e, buf, "metrics")
+	return e.exportAsLine(buf, "metrics")
 }
 
 func (e *fileExporter) ConsumeLogs(_ context.Context, ld plog.Logs) error {
-	buf, err := pbLogsMarshaller.MarshalLogs(ld)
+	var err error
+	var buf []byte
+	if strings.EqualFold(e.format, Json) {
+		buf, err = jsonLogsMarshaller.MarshalLogs(ld)
+	} else if strings.EqualFold(e.format, Protobuf) {
+		buf, err = pbLogsMarshaller.MarshalLogs(ld)
+	} else {
+		return errors.New("invalid format, valid format value is either json or protobuf")
+	}
+
 	if err != nil {
 		return err
 	}
-	return exportAsLine(e, buf, "logs")
+	return e.exportAsLine(buf, "logs")
 }
 
-func exportAsLine(e *fileExporter, buf []byte, exporttype string) error {
+func (e *fileExporter) exportAsLine(buf []byte, exporttype string) error {
 
 	// Ensure only one write operation happens at a time.
 	e.mutex.Lock()
@@ -90,91 +126,20 @@ func exportAsLine(e *fileExporter, buf []byte, exporttype string) error {
 			core.ErrorLogger.Printf("failed to create path %s, error %s \n", path, err)
 		}
 	}
-	// check if there is already a file with extension .inprocess, if yes use it else create new
-	files, err := filepath.Glob(filepath.Join(path, fmt.Sprintf(".%s", ext)))
-	if err != nil {
-		core.ErrorLogger.Printf("failed to find inprocess file at path %s, error %s \n", path, err)
-		return err
-	}
-	msize := int64(binary.Size(buf) / 1024)
-	if len(files) == 0 {
-		err = writeToNewFile(path, buf)
-		return err
+	var err error
+	if e.fileSizeKb > 0 {
+		err = e.writeAsPerKb(buf, exporttype, path)
+	} else if e.eventsPerFile > 0 {
+		err = e.writeAsPerEventCount(buf, exporttype, path)
 	} else {
-		// get the size of .inprocess file
-		f := files[0]
-		core.InfoLogger.Printf("current inprocess file found, %s \n", f)
-		file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			core.ErrorLogger.Printf("failed to open inprocess file, %s , error %s \n", f, err)
-			return err
-		}
-		defer file.Close()
-		core.DebugLogger.Printf("finding the size of current inprocess file ")
-		stat, err := file.Stat()
-		if err != nil {
-			core.ErrorLogger.Printf("failed to get stats for inprocess file, %s , error %s \n", f, err)
-			return err
-		}
-		kb := (stat.Size() / 1024)
-		core.DebugLogger.Printf("before writing to inprocess file %s, file size is [ %d ]kb and metrics data size is [ %d ]kb \n", f, kb, msize)
-		total := (kb + msize)
-		// after adding current data to existing inprocess file, if the size of in process file exceeds
-		// the maxfilesize, then close the current inprocess file and delete the extension .inprocess
-		// so it will be treated as completed and ready for upload, and the current data will be written
-		// to new inprocess file
-		size, err := strconv.ParseInt(e.fileSizeKb, 10, 64)
-		if err != nil {
-			return err
-		}
-		if total > size {
-			core.DebugLogger.Printf("closing the current inprocess file ")
-			err = file.Close()
-			if err != nil {
-				core.ErrorLogger.Printf("failed to close inprocess file, %s, error %s \n", f, err)
-				return err
-			}
-
-			currentTime := time.Now().UTC()
-			t := currentTime.Format(timeFormat)
-			fnew := fmt.Sprintf("%s.%s", t, protobuf)
-			fnew = strings.Replace(f, fmt.Sprintf(".%s", ext), fnew, 1)
-			core.DebugLogger.Printf("old fine name is %s new file name is %s", f, fnew)
-			err = os.Rename(f, fnew)
-			if err != nil {
-				core.ErrorLogger.Printf("failed to rename inprocess file, %s \n to new file name %s \n", f, fnew)
-				core.ErrorLogger.Printf("error %s ", err)
-				return err
-			}
-			core.DebugLogger.Printf("size of current inprocess file and metrics data size exceeds the max file size, so creating new file to write metrics data")
-			err = writeToNewFile(path, buf)
-			core.DebugLogger.Printf("metrics data wrote to new inprocess file ")
-			return err
-		} else {
-			core.InfoLogger.Printf("writing metricss data to exitsing inprocess file, %s \n", f)
-			newline := string("\n")
-			if _, err := file.WriteString(newline); err != nil {
-				core.ErrorLogger.Printf("failed to append new line to inprocess file, %s, error %s \n", f, err)
-				return err
-			}
-			if _, err := file.Write(buf); err != nil {
-				core.ErrorLogger.Printf("failed to write data to inprocess file, %s, error %s \n", f, err)
-				return err
-			}
-			core.DebugLogger.Printf("size of current inprocess file and metrics data size is less than the max file size, so writing to the same file")
-		}
+		return errors.New("invalid option, neither file size nor events per file is defined")
 	}
 
-	return nil
+	return err
 }
 
 func writeToNewFile(path string, buf []byte) error {
 	core.InfoLogger.Printf("current inprocess file not found, so creating one \n")
-	// currentTime := time.Now().UTC()
-	// t := currentTime.Format(timeformat)
-	// filename := fmt.Sprintf("%s.%s", t, ext)
-	filename := fmt.Sprintf(".%s", ext)
-	path = filepath.Join(path, filename)
 	err := resx.WriteFile(buf, path, "")
 	if err != nil {
 		core.ErrorLogger.Printf("failed to write to file, %s , error %s \n", path, err)
@@ -184,13 +149,188 @@ func writeToNewFile(path string, buf []byte) error {
 }
 
 func (e *fileExporter) Start(context.Context, component.Host) error {
-	// var err error
-	// e.file, err = os.OpenFile(e.path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-	// return err
 	return nil
 }
 
 // Shutdown stops the exporter and is invoked during shutdown.
 func (e *fileExporter) Shutdown(context.Context) error {
 	return nil
+}
+
+func (e *fileExporter) writeAsPerKb(buf []byte, exporttype, path string) error {
+	// check if there is already a file with extension .inprocess, if yes use it else create new
+	files, err := filepath.Glob(filepath.Join(path, fmt.Sprintf(".%s", ext)))
+	if err != nil {
+		core.ErrorLogger.Printf("failed to find inprocess file at path %s, error %s \n", path, err)
+		return err
+	}
+	msize := int64(binary.Size(buf) / 1024)
+	er, bol := e.isFileSizeExceeding(files, msize)
+	if er != nil {
+		return er
+	}
+	if len(files) == 0 || bol {
+		if bol {
+			e.renameFile(files[0])
+		}
+		filename := fmt.Sprintf(".%s", ext)
+		path = filepath.Join(path, filename)
+		err = writeToNewFile(path, buf)
+		return err
+	} else {
+		f := files[0]
+		core.InfoLogger.Printf("current inprocess file found, %s \n", f)
+		file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			core.ErrorLogger.Printf("failed to open inprocess file, %s , error %s \n", f, err)
+			return err
+		}
+		defer file.Close()
+		core.InfoLogger.Printf("writing metricss data to exitsing inprocess file, %s \n", f)
+		newline := string("\n")
+		if _, err := file.WriteString(newline); err != nil {
+			core.ErrorLogger.Printf("failed to append new line to inprocess file, %s, error %s \n", f, err)
+			return err
+		}
+		if _, err := file.Write(buf); err != nil {
+			core.ErrorLogger.Printf("failed to write data to inprocess file, %s, error %s \n", f, err)
+			return err
+		}
+		core.DebugLogger.Printf("size of current inprocess file and metrics data size is less than the max file size, so writing to the same file")
+		//}
+	}
+
+	return nil
+}
+
+func (e *fileExporter) writeAsPerEventCount(buf []byte, exporttype, path string) error {
+	// check if there is already a file with extension .inprocess, if yes use it else create new
+	core.InfoLogger.Printf("writeAsPerEventCount current event count before writing event to file [ %d ]", e.currentEventCount)
+	if e.currentEventCount == 0 {
+		e.currentEventCount = e.currentEventCount + 1
+		filename := fmt.Sprintf(".%s", ext)
+		path = filepath.Join(path, filename)
+		err := writeToNewFile(path, buf)
+		return err
+	} else {
+		core.InfoLogger.Printf("writeAsPerEventCount:- before writing event, current event count [ %d ] event count defined [ %d ]",
+			e.currentEventCount, e.eventsPerFile)
+		files, err := filepath.Glob(filepath.Join(path, fmt.Sprintf(".%s", ext)))
+		if err != nil {
+			core.ErrorLogger.Printf("failed to find inprocess file at path %s, error %s \n", path, err)
+			return err
+		}
+		f := files[0]
+		core.InfoLogger.Printf("current inprocess file found, %s \n", f)
+		file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			core.ErrorLogger.Printf("failed to open inprocess file, %s , error %s \n", f, err)
+			return err
+		}
+		defer file.Close()
+		core.InfoLogger.Printf("writeAsPerEventCount:- writing event to inprocess file")
+		newline := string("\n")
+		if _, err := file.WriteString(newline); err != nil {
+			core.ErrorLogger.Printf("failed to append new line to inprocess file, %s, error %s \n", f, err)
+			return err
+		}
+		if _, err := file.Write(buf); err != nil {
+			core.ErrorLogger.Printf("failed to write event data to inprocess file, %s, error %s \n", f, err)
+			return err
+		}
+		e.currentEventCount = e.currentEventCount + 1
+		core.DebugLogger.Printf("*incremented current event count new current event count is [ %d ] ", e.currentEventCount)
+		if e.currentEventCount == e.eventsPerFile {
+			core.DebugLogger.Printf("closing the current inprocess file as events per file matches")
+			err = file.Close()
+			if err != nil {
+				core.ErrorLogger.Printf("failed to close inprocess file, %s, error %s \n", f, err)
+				return err
+			}
+
+			currentTime := time.Now().UTC()
+			t := currentTime.Format(timeFormat)
+			var newex string
+			if strings.EqualFold(e.format, Json) {
+				newex = "json"
+			} else if strings.EqualFold(e.format, Protobuf) {
+				newex = "proto"
+			} else {
+				return errors.New("invalid format, valid format value is either json or protobuf")
+			}
+			fnew := fmt.Sprintf("%s.%s", t, newex)
+			fnew = strings.Replace(f, fmt.Sprintf(".%s", ext), fnew, 1)
+			core.DebugLogger.Printf("renaming old fine name %s to new file name %s", f, fnew)
+			err = os.Rename(f, fnew)
+			if err != nil {
+				core.ErrorLogger.Printf("failed to rename inprocess file, %s \n to new file name %s \n", f, fnew)
+				core.ErrorLogger.Printf("error %s ", err)
+				return err
+			}
+			e.currentEventCount = 0
+		}
+	}
+
+	return nil
+}
+
+func (e fileExporter) isFileSizeExceeding(files []string, msize int64) (error, bool) {
+	// get the size of .inprocess file
+	if len(files) == 0 {
+		return nil, false
+	}
+	f := files[0]
+	core.InfoLogger.Printf("current inprocess file found, %s \n", f)
+	file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		core.ErrorLogger.Printf("failed to open inprocess file, %s , error %s \n", f, err)
+		return err, false
+	}
+	defer file.Close()
+	core.DebugLogger.Printf("finding the size of current inprocess file ")
+	stat, err := file.Stat()
+	if err != nil {
+		core.ErrorLogger.Printf("failed to get stats for inprocess file, %s , error %s \n", f, err)
+		return err, false
+	}
+	kb := (stat.Size() / 1024)
+	core.DebugLogger.Printf("before writing to inprocess file %s, file size is [ %d ]kb and metrics data size is [ %d ]kb \n", f, kb, msize)
+	total := (kb + msize)
+	// after adding current data to existing inprocess file, if the size of in process file exceeds
+	// the maxfilesize, then close the current inprocess file and delete the extension .inprocess
+	// so it will be treated as completed and ready for upload, and the current data will be written
+	// to new inprocess file
+	size := e.fileSizeKb
+
+	return nil, (total > size)
+}
+
+func (e fileExporter) renameFile(f string) error {
+	core.DebugLogger.Printf("closing the current inprocess file ")
+	/*		err = file.Close()
+			if err != nil {
+				core.ErrorLogger.Printf("failed to close inprocess file, %s, error %s \n", f, err)
+				return err
+			}*/
+
+	currentTime := time.Now().UTC()
+	t := currentTime.Format(timeFormat)
+	var newex string
+	if strings.EqualFold(e.format, Json) {
+		newex = "json"
+	} else if strings.EqualFold(e.format, Protobuf) {
+		newex = "proto"
+	} else {
+		return errors.New("invalid format, valid format value is either json or protobuf")
+	}
+
+	fnew := fmt.Sprintf("%s.%s", t, newex)
+	fnew = strings.Replace(f, fmt.Sprintf(".%s", ext), fnew, 1)
+	core.DebugLogger.Printf("renaming inprocess file [ %s ] to new file name [ %s ]", f, fnew)
+	err := os.Rename(f, fnew)
+	if err != nil {
+		core.ErrorLogger.Printf("failed to rename inprocess file, %s \n to new file name %s \n", f, fnew)
+		core.ErrorLogger.Printf("error %s ", err)
+	}
+	return err
 }

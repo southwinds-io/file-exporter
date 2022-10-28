@@ -45,7 +45,8 @@ func createTracesExporter(
 	cfg config.Exporter,
 ) (component.TracesExporter, error) {
 	fe := exporters.GetOrAdd(cfg, func() component.Component {
-		return &fileExporter{path: cfg.(*Config).Path, fileSizeKb: cfg.(*Config).FileSizeKb}
+		return &fileExporter{path: cfg.(*Config).Path, fileSizeKb: cfg.(*Config).FileSizeKb,
+			eventsPerFile: cfg.(*Config).EventsPerFile, format: cfg.(*Config).Format}
 	})
 	return exporterhelper.NewTracesExporter(
 		cfg,
@@ -62,7 +63,8 @@ func createMetricsExporter(
 	cfg config.Exporter,
 ) (component.MetricsExporter, error) {
 	fe := exporters.GetOrAdd(cfg, func() component.Component {
-		return &fileExporter{path: cfg.(*Config).Path, fileSizeKb: cfg.(*Config).FileSizeKb}
+		return &fileExporter{path: cfg.(*Config).Path, fileSizeKb: cfg.(*Config).FileSizeKb,
+			eventsPerFile: cfg.(*Config).EventsPerFile, format: cfg.(*Config).Format}
 	})
 	return exporterhelper.NewMetricsExporter(
 		cfg,
@@ -79,7 +81,8 @@ func createLogsExporter(
 	cfg config.Exporter,
 ) (component.LogsExporter, error) {
 	fe := exporters.GetOrAdd(cfg, func() component.Component {
-		return &fileExporter{path: cfg.(*Config).Path, fileSizeKb: cfg.(*Config).FileSizeKb}
+		return &fileExporter{path: cfg.(*Config).Path, fileSizeKb: cfg.(*Config).FileSizeKb,
+			eventsPerFile: cfg.(*Config).EventsPerFile, format: cfg.(*Config).Format}
 	})
 	return exporterhelper.NewLogsExporter(
 		cfg,
