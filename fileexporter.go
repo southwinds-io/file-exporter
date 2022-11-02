@@ -76,7 +76,7 @@ func (e *fileExporter) ConsumeTraces(_ context.Context, td ptrace.Traces) error 
 	if err != nil {
 		return err
 	}
-	return e.exportAsLine(buf, "traces")
+	return e.exportAsLine(buf)
 }
 
 func (e *fileExporter) ConsumeMetrics(_ context.Context, md pmetric.Metrics) error {
@@ -94,7 +94,7 @@ func (e *fileExporter) ConsumeMetrics(_ context.Context, md pmetric.Metrics) err
 	if err != nil {
 		return err
 	}
-	return e.exportAsLine(buf, "metrics")
+	return e.exportAsLine(buf)
 }
 
 func (e *fileExporter) ConsumeLogs(_ context.Context, ld plog.Logs) error {
@@ -111,16 +111,16 @@ func (e *fileExporter) ConsumeLogs(_ context.Context, ld plog.Logs) error {
 	if err != nil {
 		return err
 	}
-	return e.exportAsLine(buf, "logs")
+	return e.exportAsLine(buf)
 }
 
-func (e *fileExporter) exportAsLine(buf []byte, exporttype string) error {
+func (e *fileExporter) exportAsLine(buf []byte) error {
 
 	// Ensure only one write operation happens at a time.
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	path := core.ToAbs(e.path)
-	path = filepath.Join(path, exporttype)
+	path = e.path
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err = os.MkdirAll(path, 0755); err != nil {
 			core.ErrorLogger.Printf("failed to create path %s, error %s \n", path, err)
@@ -128,9 +128,9 @@ func (e *fileExporter) exportAsLine(buf []byte, exporttype string) error {
 	}
 	var err error
 	if e.fileSizeKb > 0 {
-		err = e.writeAsPerKb(buf, exporttype, path)
+		err = e.writeAsPerKb(buf, path)
 	} else if e.eventsPerFile > 0 {
-		err = e.writeAsPerEventCount(buf, exporttype, path)
+		err = e.writeAsPerEventCount(buf, path)
 	} else {
 		return errors.New("invalid option, neither file size nor events per file is defined")
 	}
@@ -157,7 +157,7 @@ func (e *fileExporter) Shutdown(context.Context) error {
 	return nil
 }
 
-func (e *fileExporter) writeAsPerKb(buf []byte, exporttype, path string) error {
+func (e *fileExporter) writeAsPerKb(buf []byte, path string) error {
 	// check if there is already a file with extension .inprocess, if yes use it else create new
 	files, err := filepath.Glob(filepath.Join(path, fmt.Sprintf(".%s", ext)))
 	if err != nil {
@@ -186,7 +186,7 @@ func (e *fileExporter) writeAsPerKb(buf []byte, exporttype, path string) error {
 			return err
 		}
 		defer file.Close()
-		core.InfoLogger.Printf("writing metricss data to exitsing inprocess file, %s \n", f)
+		core.InfoLogger.Printf("writing data to exitsing inprocess file, %s \n", f)
 		newline := string("\n")
 		if _, err := file.WriteString(newline); err != nil {
 			core.ErrorLogger.Printf("failed to append new line to inprocess file, %s, error %s \n", f, err)
@@ -196,14 +196,14 @@ func (e *fileExporter) writeAsPerKb(buf []byte, exporttype, path string) error {
 			core.ErrorLogger.Printf("failed to write data to inprocess file, %s, error %s \n", f, err)
 			return err
 		}
-		core.DebugLogger.Printf("size of current inprocess file and metrics data size is less than the max file size, so writing to the same file")
+		core.DebugLogger.Printf("size of current inprocess file and input data size is less than the max file size, so writing to the same file")
 		//}
 	}
 
 	return nil
 }
 
-func (e *fileExporter) writeAsPerEventCount(buf []byte, exporttype, path string) error {
+func (e *fileExporter) writeAsPerEventCount(buf []byte, path string) error {
 	// check if there is already a file with extension .inprocess, if yes use it else create new
 	core.InfoLogger.Printf("writeAsPerEventCount current event count before writing event to file [ %d ]", e.currentEventCount)
 	if e.currentEventCount == 0 {
@@ -294,7 +294,7 @@ func (e fileExporter) isFileSizeExceeding(files []string, msize int64) (error, b
 		return err, false
 	}
 	kb := (stat.Size() / 1024)
-	core.DebugLogger.Printf("before writing to inprocess file %s, file size is [ %d ]kb and metrics data size is [ %d ]kb \n", f, kb, msize)
+	core.DebugLogger.Printf("before writing to inprocess file %s, file size is [ %d ]kb and input data size is [ %d ]kb \n", f, kb, msize)
 	total := (kb + msize)
 	// after adding current data to existing inprocess file, if the size of in process file exceeds
 	// the maxfilesize, then close the current inprocess file and delete the extension .inprocess

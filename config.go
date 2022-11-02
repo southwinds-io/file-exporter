@@ -11,7 +11,6 @@ package fileexporter
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"go.opentelemetry.io/collector/config"
@@ -36,7 +35,6 @@ type Config struct {
 	EventsPerFile int64  `mapstructure:"eventsPerFile"`
 	Format        string `mapstructure:"format"`
 	Default       string `mapstructure:"default"`
-	FolderName    string `mapstructure:"folderName"`
 }
 
 var _ config.Exporter = (*Config)(nil)
@@ -51,11 +49,6 @@ func (cfg *Config) Validate() error {
 		return errors.New("format must be defined as either json or protobuf")
 	}
 
-	if len(cfg.FolderName) == 0 {
-		return errors.New("folder name attribute cannot be empty in the telemetry config file")
-	}
-	//modify path by adding a child folder with name as mentioned in cfg.FolderName
-	cfg.Path = filepath.Join(cfg.Path, cfg.FolderName)
 	if !strings.EqualFold(cfg.Format, Json) && !strings.EqualFold(cfg.Format, Protobuf) {
 		return fmt.Errorf("invalid format [%s] , valid format value is either [ json or protobuf]", cfg.Format)
 	}
