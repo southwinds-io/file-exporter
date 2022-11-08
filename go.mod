@@ -2,11 +2,16 @@ module southwinds.dev/file-exporter
 
 go 1.19
 
+replace (
+	southwinds.dev/artisan => ../artisan
+	southwinds.dev/os => ../os
+)
+
 require (
 	go.opentelemetry.io/collector v0.56.0
 	go.opentelemetry.io/collector/pdata v0.56.0
-	southwinds.dev/artisan v0.0.0-20220902152542-3b075fc8ab73
-	southwinds.dev/os v0.0.0-20220901065504-762d072c036a
+	southwinds.dev/artisan v0.0.0-20221104135442-166153ace858
+	southwinds.dev/os v0.0.0-20221107115514-6bcbf59b1755
 )
 
 require (

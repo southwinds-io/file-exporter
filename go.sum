@@ -375,7 +375,3 @@ gopkg.in/yaml.v3 v3.0.0/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
 honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
-southwinds.dev/artisan v0.0.0-20220902152542-3b075fc8ab73 h1:8UtYCnYKoZIujGQ0NhHK1pCCU6uqLOP+CAFtylndse4=
-southwinds.dev/artisan v0.0.0-20220902152542-3b075fc8ab73/go.mod h1:zr0GBMKJ7n9ZwBNeKlw5Vz1ANwwPeLrEZgDQv9fCfGE=
-southwinds.dev/os v0.0.0-20220901065504-762d072c036a h1:6u60rwKUSE9wiegKXW4dt7JVHZihXOToMLOOghGY46M=
-southwinds.dev/os v0.0.0-20220901065504-762d072c036a/go.mod h1:Gr8LYFjr70C2jlBL4uocwT1VZ6iEPMQNHPWYXfbPWtQ=

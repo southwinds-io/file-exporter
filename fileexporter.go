@@ -119,8 +119,7 @@ func (e *fileExporter) exportAsLine(buf []byte) error {
 	// Ensure only one write operation happens at a time.
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
-	path := core.ToAbs(e.path)
-	path = e.path
+	path := e.path
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err = os.MkdirAll(path, 0755); err != nil {
 			core.ErrorLogger.Printf("failed to create path %s, error %s \n", path, err)
@@ -135,16 +134,6 @@ func (e *fileExporter) exportAsLine(buf []byte) error {
 		return errors.New("invalid option, neither file size nor events per file is defined")
 	}
 
-	return err
-}
-
-func writeToNewFile(path string, buf []byte) error {
-	core.InfoLogger.Printf("current inprocess file not found, so creating one \n")
-	err := resx.WriteFile(buf, path, "")
-	if err != nil {
-		core.ErrorLogger.Printf("failed to write to file, %s , error %s \n", path, err)
-		return err
-	}
 	return err
 }
 
@@ -171,35 +160,22 @@ func (e *fileExporter) writeAsPerKb(buf []byte, path string) error {
 	}
 	if len(files) == 0 || bol {
 		if bol {
-			e.renameFile(files[0])
+			e.renameTmpFile(files[0])
 		}
 		filename := fmt.Sprintf(".%s", ext)
 		path = filepath.Join(path, filename)
-		err = writeToNewFile(path, buf)
+		err = resx.AppendFileBatch(buf, path, 0755)
 		return err
 	} else {
 		f := files[0]
-		core.InfoLogger.Printf("current inprocess file found, %s \n", f)
-		file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		core.InfoLogger.Printf("writeAsPerKb current inprocess file found, %s \n", f)
+		err = resx.AppendFileBatch(buf, f, 0755)
 		if err != nil {
-			core.ErrorLogger.Printf("failed to open inprocess file, %s , error %s \n", f, err)
-			return err
-		}
-		defer file.Close()
-		core.InfoLogger.Printf("writing data to exitsing inprocess file, %s \n", f)
-		newline := string("\n")
-		if _, err := file.WriteString(newline); err != nil {
-			core.ErrorLogger.Printf("failed to append new line to inprocess file, %s, error %s \n", f, err)
-			return err
-		}
-		if _, err := file.Write(buf); err != nil {
 			core.ErrorLogger.Printf("failed to write data to inprocess file, %s, error %s \n", f, err)
 			return err
 		}
 		core.DebugLogger.Printf("size of current inprocess file and input data size is less than the max file size, so writing to the same file")
-		//}
 	}
-
 	return nil
 }
 
@@ -210,77 +186,78 @@ func (e *fileExporter) writeAsPerEventCount(buf []byte, path string) error {
 		e.currentEventCount = e.currentEventCount + 1
 		filename := fmt.Sprintf(".%s", ext)
 		path = filepath.Join(path, filename)
-		err := writeToNewFile(path, buf)
-		return err
+		err := resx.AppendFileBatch(buf, path, 0644)
+		if err != nil {
+			core.ErrorLogger.Printf("failed to append data to inprocess file at path %s, error %s \n", path, err)
+			return err
+		}
+		if e.currentEventCount == e.eventsPerFile {
+			err = e.renameTmpFile(path)
+			if err != nil {
+				core.ErrorLogger.Printf("failed to rename inprocess file at path %s, error %s \n", path, err)
+				return err
+			}
+		}
+		return nil
 	} else {
-		core.InfoLogger.Printf("writeAsPerEventCount:- before writing event, current event count [ %d ] event count defined [ %d ]",
-			e.currentEventCount, e.eventsPerFile)
 		files, err := filepath.Glob(filepath.Join(path, fmt.Sprintf(".%s", ext)))
 		if err != nil {
 			core.ErrorLogger.Printf("failed to find inprocess file at path %s, error %s \n", path, err)
 			return err
 		}
 		f := files[0]
-		core.InfoLogger.Printf("current inprocess file found, %s \n", f)
-		file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		core.InfoLogger.Printf("writeAsPerEventCount appending file batch to => [ %s ] \n", f)
+		err = resx.AppendFileBatch(buf, f, 0644)
 		if err != nil {
-			core.ErrorLogger.Printf("failed to open inprocess file, %s , error %s \n", f, err)
-			return err
-		}
-		defer file.Close()
-		core.InfoLogger.Printf("writeAsPerEventCount:- writing event to inprocess file")
-		newline := string("\n")
-		if _, err := file.WriteString(newline); err != nil {
-			core.ErrorLogger.Printf("failed to append new line to inprocess file, %s, error %s \n", f, err)
-			return err
-		}
-		if _, err := file.Write(buf); err != nil {
-			core.ErrorLogger.Printf("failed to write event data to inprocess file, %s, error %s \n", f, err)
+			core.ErrorLogger.Printf("failed to append data to inprocess file, %s, error %s \n", f, err)
 			return err
 		}
 		e.currentEventCount = e.currentEventCount + 1
-		core.DebugLogger.Printf("*incremented current event count new current event count is [ %d ] ", e.currentEventCount)
+		core.DebugLogger.Printf("incremented current event count, current [ %d ], per file [ %d ] ", e.currentEventCount, e.eventsPerFile)
 		if e.currentEventCount == e.eventsPerFile {
-			core.DebugLogger.Printf("closing the current inprocess file as events per file matches")
-			err = file.Close()
+			err = e.renameTmpFile(f)
 			if err != nil {
-				core.ErrorLogger.Printf("failed to close inprocess file, %s, error %s \n", f, err)
+				core.ErrorLogger.Printf("failed to rename inprocess file at path %s, error %s \n", path, err)
 				return err
 			}
-
-			currentTime := time.Now().UTC()
-			t := currentTime.Format(timeFormat)
-			var newex string
-			if strings.EqualFold(e.format, Json) {
-				newex = "json"
-			} else if strings.EqualFold(e.format, Protobuf) {
-				newex = "proto"
-			} else {
-				return errors.New("invalid format, valid format value is either json or protobuf")
-			}
-			fnew := fmt.Sprintf("%s.%s", t, newex)
-			fnew = strings.Replace(f, fmt.Sprintf(".%s", ext), fnew, 1)
-			core.DebugLogger.Printf("renaming old fine name %s to new file name %s", f, fnew)
-			err = os.Rename(f, fnew)
-			if err != nil {
-				core.ErrorLogger.Printf("failed to rename inprocess file, %s \n to new file name %s \n", f, fnew)
-				core.ErrorLogger.Printf("error %s ", err)
-				return err
-			}
-			e.currentEventCount = 0
 		}
 	}
 
 	return nil
 }
 
-func (e fileExporter) isFileSizeExceeding(files []string, msize int64) (error, bool) {
+func (e *fileExporter) renameTmpFile(f string) error {
+	if e.currentEventCount == e.eventsPerFile {
+		currentTime := time.Now().UTC()
+		t := currentTime.Format(timeFormat)
+		var newex string
+		if strings.EqualFold(e.format, Json) {
+			newex = "json"
+		} else if strings.EqualFold(e.format, Protobuf) {
+			newex = "proto"
+		} else {
+			return errors.New("invalid format, valid format value is either json or protobuf")
+		}
+		fnew := fmt.Sprintf("%s.%s", t, newex)
+		fnew = strings.Replace(f, fmt.Sprintf(".%s", ext), fnew, 1)
+		core.DebugLogger.Printf("renaming old fine name %s to new file name %s", f, fnew)
+		err := os.Rename(f, fnew)
+		if err != nil {
+			core.ErrorLogger.Printf("failed to rename inprocess file, %s \n to new file name %s \n", f, fnew)
+			core.ErrorLogger.Printf("error %s ", err)
+			return err
+		}
+		e.currentEventCount = 0
+	}
+	return nil
+}
+
+func (e *fileExporter) isFileSizeExceeding(files []string, msize int64) (error, bool) {
 	// get the size of .inprocess file
 	if len(files) == 0 {
 		return nil, false
 	}
 	f := files[0]
-	core.InfoLogger.Printf("current inprocess file found, %s \n", f)
 	file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		core.ErrorLogger.Printf("failed to open inprocess file, %s , error %s \n", f, err)
@@ -303,34 +280,4 @@ func (e fileExporter) isFileSizeExceeding(files []string, msize int64) (error, b
 	size := e.fileSizeKb
 
 	return nil, (total > size)
-}
-
-func (e fileExporter) renameFile(f string) error {
-	core.DebugLogger.Printf("closing the current inprocess file ")
-	/*		err = file.Close()
-			if err != nil {
-				core.ErrorLogger.Printf("failed to close inprocess file, %s, error %s \n", f, err)
-				return err
-			}*/
-
-	currentTime := time.Now().UTC()
-	t := currentTime.Format(timeFormat)
-	var newex string
-	if strings.EqualFold(e.format, Json) {
-		newex = "json"
-	} else if strings.EqualFold(e.format, Protobuf) {
-		newex = "proto"
-	} else {
-		return errors.New("invalid format, valid format value is either json or protobuf")
-	}
-
-	fnew := fmt.Sprintf("%s.%s", t, newex)
-	fnew = strings.Replace(f, fmt.Sprintf(".%s", ext), fnew, 1)
-	core.DebugLogger.Printf("renaming inprocess file [ %s ] to new file name [ %s ]", f, fnew)
-	err := os.Rename(f, fnew)
-	if err != nil {
-		core.ErrorLogger.Printf("failed to rename inprocess file, %s \n to new file name %s \n", f, fnew)
-		core.ErrorLogger.Printf("error %s ", err)
-	}
-	return err
 }
