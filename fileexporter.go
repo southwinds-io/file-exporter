@@ -37,14 +37,14 @@ const (
 )
 
 // Marshaller configuration used for marshaling Protobuf.
-var pbTracesMarshaller = ptrace.NewProtoMarshaler()
-var pbMetricsMarshaller = pmetric.NewProtoMarshaler()
-var pbLogsMarshaller = plog.NewProtoMarshaler()
+var pbTracesMarshaller = ptrace.ProtoMarshaler{}
+var pbMetricsMarshaller = pmetric.ProtoMarshaler{}
+var pbLogsMarshaller = plog.ProtoMarshaler{}
 
 // Marshaller configuration used for marshaling Json.
-var jsonTracesMarshaller = ptrace.NewJSONMarshaler()
-var jsonMetricsMarshaller = pmetric.NewJSONMarshaler()
-var jsonLogsMarshaller = plog.NewJSONMarshaler()
+var jsonTracesMarshaller = ptrace.JSONMarshaler{}
+var jsonMetricsMarshaller = pmetric.JSONMarshaler{}
+var jsonLogsMarshaller = plog.JSONMarshaler{}
 
 // fileExporter is the implementation of file exporter that writes telemetry data to a file
 // in Protobuf-JSON format.

@@ -11,9 +11,10 @@ package fileexporter
 import (
 	"errors"
 	"fmt"
-	"strings"
 
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config"
+	"strings"
 )
 
 const (
@@ -37,7 +38,7 @@ type Config struct {
 	Default       string `mapstructure:"default"`
 }
 
-var _ config.Exporter = (*Config)(nil)
+var _ component.ExporterConfig = (*Config)(nil)
 
 // Validate checks if the exporter configuration is valid
 func (cfg *Config) Validate() error {
