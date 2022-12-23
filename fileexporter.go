@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,6 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
-	"southwinds.dev/artisan/core"
 	resx "southwinds.dev/os"
 )
 
@@ -122,7 +122,7 @@ func (e *fileExporter) exportAsLine(buf []byte) error {
 	path := e.path
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err = os.MkdirAll(path, 0755); err != nil {
-			core.ErrorLogger.Printf("failed to create path %s, error %s \n", path, err)
+			log.Printf("failed to create path %s, error %s \n", path, err)
 		}
 	}
 	var err error
@@ -150,7 +150,7 @@ func (e *fileExporter) writeAsPerKb(buf []byte, path string) error {
 	// check if there is already a file with extension .inprocess, if yes use it else create new
 	files, err := filepath.Glob(filepath.Join(path, fmt.Sprintf(".%s", ext)))
 	if err != nil {
-		core.ErrorLogger.Printf("failed to find inprocess file at path %s, error %s \n", path, err)
+		log.Printf("failed to find inprocess file at path %s, error %s \n", path, err)
 		return err
 	}
 	msize := int64(binary.Size(buf) / 1024)
@@ -168,33 +168,39 @@ func (e *fileExporter) writeAsPerKb(buf []byte, path string) error {
 		return err
 	} else {
 		f := files[0]
-		core.InfoLogger.Printf("writeAsPerKb current inprocess file found, %s \n", f)
+		if len(os.Getenv("TELE_DEBUG")) > 0 {
+			log.Printf("writeAsPerKb current inprocess file found, %s \n", f)
+		}
 		err = resx.AppendFileBatch(buf, f, 0755)
 		if err != nil {
-			core.ErrorLogger.Printf("failed to write data to inprocess file, %s, error %s \n", f, err)
+			log.Printf("failed to write data to inprocess file, %s, error %s \n", f, err)
 			return err
 		}
-		core.DebugLogger.Printf("size of current inprocess file and input data size is less than the max file size, so writing to the same file")
+		if len(os.Getenv("TELE_DEBUG")) > 0 {
+			log.Printf("size of current inprocess file and input data size is less than the max file size, so writing to the same file")
+		}
 	}
 	return nil
 }
 
 func (e *fileExporter) writeAsPerEventCount(buf []byte, path string) error {
 	// check if there is already a file with extension .inprocess, if yes use it else create new
-	core.InfoLogger.Printf("writeAsPerEventCount current event count before writing event to file [ %d ]", e.currentEventCount)
+	if len(os.Getenv("TELE_DEBUG")) > 0 {
+		log.Printf("writeAsPerEventCount current event count before writing event to file [ %d ]", e.currentEventCount)
+	}
 	if e.currentEventCount == 0 {
 		e.currentEventCount = e.currentEventCount + 1
 		filename := fmt.Sprintf(".%s", ext)
 		path = filepath.Join(path, filename)
 		err := resx.AppendFileBatch(buf, path, 0644)
 		if err != nil {
-			core.ErrorLogger.Printf("failed to append data to inprocess file at path %s, error %s \n", path, err)
+			log.Printf("failed to append data to inprocess file at path %s, error %s \n", path, err)
 			return err
 		}
 		if e.currentEventCount == e.eventsPerFile {
 			err = e.renameTmpFile(path)
 			if err != nil {
-				core.ErrorLogger.Printf("failed to rename inprocess file at path %s, error %s \n", path, err)
+				log.Printf("failed to rename inprocess file at path %s, error %s \n", path, err)
 				return err
 			}
 		}
@@ -202,22 +208,26 @@ func (e *fileExporter) writeAsPerEventCount(buf []byte, path string) error {
 	} else {
 		files, err := filepath.Glob(filepath.Join(path, fmt.Sprintf(".%s", ext)))
 		if err != nil {
-			core.ErrorLogger.Printf("failed to find inprocess file at path %s, error %s \n", path, err)
+			log.Printf("failed to find inprocess file at path %s, error %s \n", path, err)
 			return err
 		}
 		f := files[0]
-		core.InfoLogger.Printf("writeAsPerEventCount appending file batch to => [ %s ] \n", f)
+		if len(os.Getenv("TELE_DEBUG")) > 0 {
+			log.Printf("writeAsPerEventCount appending file batch to => [ %s ] \n", f)
+		}
 		err = resx.AppendFileBatch(buf, f, 0644)
 		if err != nil {
-			core.ErrorLogger.Printf("failed to append data to inprocess file, %s, error %s \n", f, err)
+			log.Printf("failed to append data to inprocess file, %s, error %s \n", f, err)
 			return err
 		}
 		e.currentEventCount = e.currentEventCount + 1
-		core.DebugLogger.Printf("incremented current event count, current [ %d ], per file [ %d ] ", e.currentEventCount, e.eventsPerFile)
+		if len(os.Getenv("TELE_DEBUG")) > 0 {
+			log.Printf("incremented current event count, current [ %d ], per file [ %d ] ", e.currentEventCount, e.eventsPerFile)
+		}
 		if e.currentEventCount == e.eventsPerFile {
 			err = e.renameTmpFile(f)
 			if err != nil {
-				core.ErrorLogger.Printf("failed to rename inprocess file at path %s, error %s \n", path, err)
+				log.Printf("failed to rename inprocess file at path %s, error %s \n", path, err)
 				return err
 			}
 		}
@@ -240,11 +250,13 @@ func (e *fileExporter) renameTmpFile(f string) error {
 		}
 		fnew := fmt.Sprintf("%s.%s", t, newex)
 		fnew = strings.Replace(f, fmt.Sprintf(".%s", ext), fnew, 1)
-		core.DebugLogger.Printf("renaming old fine name %s to new file name %s", f, fnew)
+		if len(os.Getenv("TELE_DEBUG")) > 0 {
+			log.Printf("renaming old fine name %s to new file name %s", f, fnew)
+		}
 		err := os.Rename(f, fnew)
 		if err != nil {
-			core.ErrorLogger.Printf("failed to rename inprocess file, %s \n to new file name %s \n", f, fnew)
-			core.ErrorLogger.Printf("error %s ", err)
+			log.Printf("failed to rename inprocess file, %s \n to new file name %s \n", f, fnew)
+			log.Printf("error %s ", err)
 			return err
 		}
 		e.currentEventCount = 0
@@ -260,18 +272,22 @@ func (e *fileExporter) isFileSizeExceeding(files []string, msize int64) (error, 
 	f := files[0]
 	file, err := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		core.ErrorLogger.Printf("failed to open inprocess file, %s , error %s \n", f, err)
+		log.Printf("failed to open inprocess file, %s , error %s \n", f, err)
 		return err, false
 	}
 	defer file.Close()
-	core.DebugLogger.Printf("finding the size of current inprocess file ")
+	if len(os.Getenv("TELE_DEBUG")) > 0 {
+		log.Printf("finding the size of current inprocess file ")
+	}
 	stat, err := file.Stat()
 	if err != nil {
-		core.ErrorLogger.Printf("failed to get stats for inprocess file, %s , error %s \n", f, err)
+		log.Printf("failed to get stats for inprocess file, %s , error %s \n", f, err)
 		return err, false
 	}
 	kb := (stat.Size() / 1024)
-	core.DebugLogger.Printf("before writing to inprocess file %s, file size is [ %d ]kb and input data size is [ %d ]kb \n", f, kb, msize)
+	if len(os.Getenv("TELE_DEBUG")) > 0 {
+		log.Printf("before writing to inprocess file %s, file size is [ %d ]kb and input data size is [ %d ]kb \n", f, kb, msize)
+	}
 	total := (kb + msize)
 	// after adding current data to existing inprocess file, if the size of in process file exceeds
 	// the maxfilesize, then close the current inprocess file and delete the extension .inprocess
